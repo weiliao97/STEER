@@ -23,7 +23,7 @@ plt.rcParams["font.weight"] = "bold"
 plt.rcParams["axes.labelweight"] = "bold"
 legend_properties = {'weight':'bold', 'size': 14}
 dir_data = {'satori': '/nobackup/users/weiliao', 'colab':'/content/drive/MyDrive/ColabNotebooks/MIMIC/Extract/MEEP/Extracted_sep_2022/0910'}
-dir_save = {'satori': '/home/weiliao/FR-TSVAE', 'colab': '/content/drive/My Drive/ColabNotebooks/MIMIC/TCN/VAE'}
+dir_save = {'satori': '/home/weiliao/FR-TSVAE', 'colab': 'content/drive/My Drive/ColabNotebooks/MIMIC/TCN/VAE'}
 
 
 if __name__ == "__main__":
@@ -31,10 +31,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Parser for time series VAE models")
     parser.add_argument("--device_id", type=int, default=0, help="GPU id")
     parser.add_argument("--platform", type=str, default='colab', choices=['satori', 'colab'], help='Platform to run the code')
-    parser.add_argument("--database", type=str, default='mimic', choices=['mimic', 'eicu'], help='Database')
-    parser.add_argument("--retrain", action = 'store_true', default= False, help="Whethe retrain")
-    parser.add_argument("--retrain_pt", type=str, default = '0525_eicu_lr1e-4beta.001_res_regrtheta_5_mlp_regr_nonsens_sens0/stage1_clfw_fold_0_epoch29.pt')
-    
     # data/loss parameters
     parser.add_argument("--use_sepsis3", action = 'store_false', default= True, help="Whethe only use sepsis3 subset")
     parser.add_argument("--bucket_size", type=int, default=300, help="bucket size to group different length of time-series data")
@@ -73,37 +69,28 @@ if __name__ == "__main__":
     utils.creat_checkpoint_folder(dir_save[args.platform] + '/checkpoints/' + workname, 'params.json', arg_dict)
 
     # load data
-    if args.database == 'mimic':
-        meep_mimic = np.load(dir_data[args.platform] + '/MIMIC_compile_0911_2022.npy', \
-                        allow_pickle=True).item()
-        train_vital = meep_mimic ['train_head']
-        dev_vital = meep_mimic ['dev_head']
-        test_vital = meep_mimic ['test_head']
-        mimic_static = np.load(dir_data[args.platform] + '/MIMIC_static_0922_2022.npy', \
-                                allow_pickle=True).item()
-        mimic_target = np.load(dir_data[args.platform] + '/MIMIC_target_0922_2022.npy', \
-                                allow_pickle=True).item()
-    else: 
-        meep_mimic = np.load(dir_data[args.platform] + '/eICU_compile_0911_2022_2.npy', \
-                        allow_pickle=True).item()
-        train_vital = meep_mimic ['train_head']
-        dev_vital = meep_mimic ['dev_head']
-        test_vital = meep_mimic ['test_head']
-        mimic_static = np.load(dir_data[args.platform] + '/eICU_static_0922_2022.npy', \
-                                allow_pickle=True).item()
-        mimic_target = np.load(dir_data[args.platform] + '/eICU_target_0922_2022.npy', \
-                                allow_pickle=True).item()
+    meep_mimic = np.load(dir_data[args.platform] + '/MIMIC_compile_0911_2022.npy', \
+                    allow_pickle=True).item()
+    train_vital = meep_mimic ['train_head']
+    dev_vital = meep_mimic ['dev_head']
+    test_vital = meep_mimic ['test_head']
+    mimic_static = np.load(dir_data[args.platform] + '/MIMIC_static_0922_2022.npy', \
+                            allow_pickle=True).item()
+    mimic_target = np.load(dir_data[args.platform] + '/MIMIC_target_0922_2022.npy', \
+                            allow_pickle=True).item()
         
-    train_head, train_static, train_sofa, train_id =  utils.crop_data_target(args.database, train_vital, mimic_target, mimic_static, 'train', args.sens_ind)
-    dev_head, dev_static, dev_sofa, dev_id =  utils.crop_data_target(args.database, dev_vital , mimic_target, mimic_static, 'dev',  args.sens_ind)
-    test_head, test_static, test_sofa, test_id =  utils.crop_data_target(args.database, test_vital, mimic_target, mimic_static, 'test',  args.sens_ind)
+    train_head, train_static, train_sofa, train_id =  utils.crop_data_target('mimic', train_vital, mimic_target, mimic_static, 'train', args.sens_ind)
+    dev_head, dev_static, dev_sofa, dev_id =  utils.crop_data_target('mimic', dev_vital , mimic_target, mimic_static, 'dev',  args.sens_ind)
+    test_head, test_static, test_sofa, test_id =  utils.crop_data_target('mimic', test_vital, mimic_target, mimic_static, 'test',  args.sens_ind)
 
     if args.use_sepsis3 == True:
-        train_head, train_static, train_sofa, train_id = utils.filter_sepsis(args.database, train_head, train_static, train_sofa, train_id, args.platform)
-        dev_head, dev_static, dev_sofa, dev_id = utils.filter_sepsis(args.database, dev_head, dev_static, dev_sofa, dev_id, args.platform)
-        test_head, test_static, test_sofa, test_id = utils.filter_sepsis(args.database, test_head, test_static, test_sofa, test_id, args.platform)
+        train_head, train_static, train_sofa, train_id = utils.filter_sepsis('mimic', train_head, train_static, train_sofa, train_id, args.platform)
+        dev_head, dev_static, dev_sofa, dev_id = utils.filter_sepsis('mimic', dev_head, dev_static, dev_sofa, dev_id, args.platform)
+        test_head, test_static, test_sofa, test_id = utils.filter_sepsis('mimic', test_head, test_static, test_sofa, test_id, args.platform)
 
-
+    # build model
+#     model = models.Ffvae(args)
+#     torch.save(model.state_dict(), dir_save[args.platform] + '/start_weights_%d.pt'%args.device_id)
 
     # 10-fold cross validation
     trainval_head = train_head + dev_head
@@ -123,7 +110,15 @@ if __name__ == "__main__":
         train_static, val_static = utils.slice_data(trainval_static, train_index), utils.slice_data(trainval_static, test_index)
         train_stail, val_stail = utils.slice_data(trainval_stail, train_index), utils.slice_data(trainval_stail, test_index)
         train_id, val_id = utils.slice_data(trainval_ids, train_index), utils.slice_data(trainval_ids, test_index)
-
+        
+        # calculate weight, eg.[tensor([1.1261, 0.8993], device='cuda:0'),tensor([1.2035, 0.8553], device='cuda:0'), tensor([0.5580, 4.8090], device='cuda:0')]
+        weights_per_class = []
+        for i in range(3):
+            ctype, count= np.unique(np.asarray(val_static)[:, i], return_counts=True)
+            total_dev_samples = len(val_static)
+            curr = torch.FloatTensor([ total_dev_samples / k / len(ctype) for k in count]).to(device)
+            weights_per_class.append(curr)
+        
         train_dataloader, dev_dataloader, test_dataloader = prepare_data.get_data_loader(args, train_head, val_head,
                                                                                             test_head, 
                                                                                             train_stail, val_stail,
@@ -134,22 +129,15 @@ if __name__ == "__main__":
                                                                                             train_id=train_id,
                                                                                             dev_id=val_id,
                                                                                             test_id=test_id)
-        ctype, count= np.unique(np.asarray(val_static), return_counts=True)
-        total_dev_samples = len(val_static)
-        weights_per_class = torch.FloatTensor([ total_dev_samples / k / len(ctype) for k in count]).to(device)
-        # build model
         model = models.Ffvae(args, weights_per_class)
-        if c_fold == 0:
-            if args.retrain: 
-                model.load_state_dict(torch.load(dir_save[args.platform] + '/checkpoints/' + args.retrain_pt, map_location='cuda:%d'%args.device_id))
-            else:
-                torch.save(model.state_dict(), dir_save[args.platform] + '/start_weights_%d.pt'%args.device_id)
+        
+        if c_fold == 0: 
+            torch.save(model.state_dict(), dir_save[args.platform] + '/start_weights_%d.pt'%args.device_id)
         else:
             model.load_state_dict(torch.load(dir_save[args.platform] + '/start_weights_%d.pt'%args.device_id))
-            
         # df to record loss
         train_loss = pd.DataFrame(columns=['ffvae_cost', 'recon_cost', 'kl_cost', 'corr_term', 'clf_term', 'clf_w_term', 'sofa_term', 'disc_cost', 'sofap_loss'])
-        dev_loss = pd.DataFrame(columns=['ffvae_cost', 'recon_cost', 'kl_cost', 'corr_term', 'clf_term', 'clf_w_term', 'sofa_term', 'disc_cost', 'sofap_loss'])
+        dev_loss = pd.DataFrame(columns=['ffvae_cost', 'recon_cost', 'kl_cost', 'corr_term', 'clf_term',  'clf_w_term', 'sofa_term', 'disc_cost', 'sofap_loss'])
         # test_loss = pd.DataFrame(columns=['ffvae_cost', 'recon_cost', 'kl_cost', 'corr_term', 'clf_term', 'disc_cost', 'sofap_loss'])
         best_loss = 1e5
         best_clf_loss = 1e4 
@@ -209,7 +197,7 @@ if __name__ == "__main__":
             if average_meters.averages()['clf_term/avg'] < best_clf_loss: 
                 best_clf_loss = average_meters.averages()['clf_term/avg']
                 best_clf_model = copy.deepcopy(model.state_dict())
-                
+
             if average_meters.averages()['clf_w_term/avg'] < best_clf_w_loss: 
                 best_clf_w_loss = average_meters.averages()['clf_w_term/avg']
                 best_clf_w_model = copy.deepcopy(model.state_dict())
@@ -224,8 +212,8 @@ if __name__ == "__main__":
             
             # save if code cannot be completely ran 
             elapsed = timeit.default_timer() - start_time
-            # threshold 11:30 
-            if elapsed > 82800 and (not saved):
+            # threshold 11:45 
+            if elapsed > 42300 and (not saved):
                 torch.save(best_model_state, dir_save[args.platform] + '/checkpoints/' + workname + '/stage1_fold_%d_epoch%d.pt'%(c_fold, j))
                 torch.save(best_clf_model, dir_save[args.platform] + '/checkpoints/' + workname + '/stage1_clf_fold_%d_epoch%d.pt'%(c_fold, j))
                 torch.save(best_clf_w_model, dir_save[args.platform] + '/checkpoints/' + workname + '/stage1_clfw_fold_%d_epoch%d.pt'%(c_fold, j))
@@ -264,8 +252,8 @@ if __name__ == "__main__":
         with open(os.path.join(dir_save[args.platform] + '/checkpoints/' + workname, 'val_loss_fold%d.pkl'%c_fold), 'wb') as f:
             pickle.dump(dev_loss, f)
 
-        train_regr_loss = pd.DataFrame(columns=['ffvae_cost', 'recon_cost', 'kl_cost', 'corr_term', 'clf_term', 'clf_w_term', 'sofa_term',  'disc_cost', 'sofap_loss'])
-        dev_regr_loss = pd.DataFrame(columns=['ffvae_cost', 'recon_cost', 'kl_cost', 'corr_term', 'clf_term', 'clf_w_term', 'sofa_term', 'disc_cost', 'sofap_loss'])
+        train_regr_loss = pd.DataFrame(columns=['ffvae_cost', 'recon_cost', 'kl_cost', 'corr_term', 'clf_term', 'sofa_term',  'disc_cost', 'sofap_loss'])
+        dev_regr_loss = pd.DataFrame(columns=['ffvae_cost', 'recon_cost', 'kl_cost', 'corr_term', 'clf_term', 'sofa_term', 'disc_cost', 'sofap_loss'])
         best_loss = 1e4
         patience = 0
         # train from best clf model

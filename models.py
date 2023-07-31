@@ -274,7 +274,7 @@ class Ffvae(nn.Module):
         self.class_neurons = ([args.zdim] + [200] + [1])
             
         if self.regr_only_nonsens:
-            self.regr_neurons = ([args.zdim-1] + [200] + [1])
+            self.regr_neurons = ([args.zdim-3] + [200] + [1])
             self.regr = MLP(self.regr_neurons, args.zdim).to(self.device)
         else:
             self.regr_neurons = ([args.zdim] + [200] + [1])
@@ -294,7 +294,7 @@ class Ffvae(nn.Module):
             raise NotImplementedError("regr_model not implemented")
 
         # index for sensitive attribute
-        self.n_sens = 1
+        self.n_sens = 3
         self.sens_idx = list(range(self.n_sens))
         self.nonsens_idx = [
             i for i in range(int(self.zdim)) if i not in self.sens_idx
@@ -392,18 +392,17 @@ class Ffvae(nn.Module):
 
         # decode: get p(a|b)
         # b logits shape torch.Size([bs, 1, T]), converts to [bs] based on real length 
-        b_squeeze = torch.stack([b_logits[i].squeeze(0)[key_mask[i]==0].mean() for i in range(len(b_logits))])
+        b_squeeze = torch.stack([b_logits[i][:, key_mask[i]==0].mean(dim=-1)  for i in range(len(b_logits))])
         clf_losses = [
             nn.BCEWithLogitsLoss()(_b_logit.to(self.device), _a_sens.to(self.device))
             for _b_logit, _a_sens in zip(
             b_squeeze.t(), attrs.type(torch.FloatTensor).t())]
-        
-        # weighted 
+        # calcualte weighted clf 
         clf_w_losses = [
-            nn.BCEWithLogitsLoss(pos_weight = self.weights[1]/self.weights[0])(_b_logit.to(self.device), _a_sens.to(self.device))
-            for _b_logit, _a_sens in zip(
-            b_squeeze.t(), attrs.type(torch.FloatTensor).t())]
-
+            nn.BCEWithLogitsLoss(pos_weight = self.weights[k][1]/self.weights[k][0])(_b_logit.to(self.device), _a_sens.to(self.device))
+            for k, (_b_logit, _a_sens) in enumerate(zip(
+            b_squeeze.t(), attrs.type(torch.FloatTensor).t()))]
+        
         # compute loss
         # (bs, T, 2)
         logits_joint, probs_joint = self.discriminator(zb.transpose(1, 2), "discriminator")
@@ -432,8 +431,10 @@ class Ffvae(nn.Module):
 
         # shuffling minibatch indexes of b0, b1, z
         z_fake = torch.zeros_like(zb)
-        z_fake[:, 0, :] = zb[:, 0, :][torch.randperm(zb.shape[0])]
-        z_fake[:, 1:, :] = zb[:, 1:, :][torch.randperm(zb.shape[0])]
+        for i in range(self.n_sens):
+            z_fake[:, i, :] = zb[:, i, :][torch.randperm(zb.shape[0])]
+            
+        z_fake[:, self.n_sens:, :] = zb[:, self.n_sens:, :][torch.randperm(zb.shape[0])]
         z_fake = z_fake.to(self.device).detach()
 
         # discriminator
@@ -456,7 +457,8 @@ class Ffvae(nn.Module):
         encoded_x = _mu.detach()
 
         # IMPORTANT: randomizing sensitive latent
-        encoded_x[:, 0, :] = torch.randn_like(encoded_x[:, 0, :])
+        for i in range(self.n_sens):
+            encoded_x[:, i, :] = torch.randn_like(encoded_x[:, i, :])
 
         # torch.Size([bs, T, 1])
         if self.regr_model == 'mlp':

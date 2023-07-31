@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils import weight_norm
 mse_loss = nn.MSELoss()
+ce_loss = nn.CrossEntropyLoss()
 
 class MLP(nn.Module):
     def __init__(self, num_neurons, zdim, activ="leakyrelu"):
@@ -122,7 +123,7 @@ class TCN(nn.Module):
     
     
 class TemporalConv(nn.Module):
-    def __init__(self, num_inputs, num_channels=[256, 128, 64, 40], kernel_size=2, dropout=0.2):
+    def __init__(self, num_inputs, num_channels=[256, 128, 64, 40], kernel_size=2, dropout=0.2, zdim=20):
         super(TemporalConv, self).__init__()
         layers = []
         num_levels = len(num_channels)
@@ -134,7 +135,7 @@ class TemporalConv(nn.Module):
                                      padding=(kernel_size-1) * dilation_size, dropout=dropout)]
 
         self.network = nn.Sequential(*layers)
-        # self.linear = nn.Linear(num_channels[-1]*216, 120)
+        self.linear = nn.Linear(num_channels[-1]*48, zdim*2)
         # nn.ReLU(),
         # nn.Dropout(0.2),
         # nn.Linear(128, 128),
@@ -144,15 +145,15 @@ class TemporalConv(nn.Module):
         # )
 
     def forward(self, x):
-        # (16, 200, 216) --> (16, 40, 216)
+        # (16, 200, 48) --> (16, 2, 48)
         x = self.network(x)
-        # (17, 2, 216) --> (17, 432)
+        # (17, 2, 48) --> (17, 96)
         # eg. t = torch.tensor([[[1, 2, 3], [3, 4, 4]], [[5, 6, 5], [7, 8, 4]], [[5, 6, 1], [7, 8, 1]]]) (2, 2, 3)
         # after flatten tensor([[1, 2, 3, 3, 4, 4],[5, 6, 5, 7, 8, 4], [5, 6, 1, 7, 8, 1]])
-        # x = torch.flatten(x, start_dim=1, end_dim=2)
-        # x = self.linear(x)
+        x = torch.flatten(x, start_dim=1, end_dim=2)
+        x = self.linear(x)
         mu_dim = x.shape[1]//2
-        return x[:, :mu_dim, :], x[:, mu_dim:, :]
+        return x[:, :mu_dim], x[:, mu_dim:]
 
 class Add1d(nn.Module):
     """
@@ -200,19 +201,19 @@ class TemporalBlockDec(nn.Module):
 
 
 class TemporalConvDec(nn.Module):
-    def __init__(self, num_inputs, num_channels=[64, 128, 256, 200], kernel_size=2, dropout=0.2):
+    def __init__(self, num_inputs, num_channels=[64, 128, 256, 200], kernel_size=2, dropout=0.2, zdim=20):
         super(TemporalConvDec, self).__init__()
         layers = []
         num_levels = len(num_channels)
         for i in range(num_levels):
             dilation_size = 2 ** i
-            in_channels = num_inputs if i == 0 else num_channels[i-1]
+            in_channels = 2 if i == 0 else num_channels[i-1]
             out_channels = num_channels[i]
             layers += [TemporalBlock(in_channels, out_channels, kernel_size, stride=1, dilation=dilation_size,
                                      padding=(kernel_size-1) * dilation_size, dropout=dropout)]
 
         self.network = nn.Sequential(*layers)
-        # self.linear = nn.Linear(60, 216*2)
+        self.linear = nn.Linear(zdim, 48*2)
         # nn.ReLU(),
         # nn.Dropout(0.2),
         # nn.Linear(128, 128),
@@ -222,10 +223,10 @@ class TemporalConvDec(nn.Module):
         # )
 
     def forward(self, x):
-        # (16, 60) --> (16, 432)
-        # x = self.linear(x)
-        # x = torch.reshape(x, (-1, 2, 216))
-        # (16, 20, 216) --> (16, 200, 216)
+        # (16, 20) --> (16, 96)
+        x = self.linear(x)
+        x = torch.reshape(x, (-1, 2, 48))
+        # (16, 2, 48) --> (16, 200, 48)
         x = self.network(x)
         # (17, 2, 216) --> (17, 432)
         # eg. t = torch.tensor([[[1, 2, 3], [3, 4, 4]], [[5, 6, 5], [7, 8, 4]], [[5, 6, 1], [7, 8, 1]]]) (2, 2, 3)
@@ -236,7 +237,7 @@ class TemporalConvDec(nn.Module):
     
 class Ffvae(nn.Module):
     """Initializes FFVAE network: VAE encoder, MLP classifier, MLP discriminator"""
-    def __init__(self, args, weights):
+    def __init__(self, args, weights, ihm_weights):
         super(Ffvae, self).__init__()
 
         self.lr = args.lr
@@ -249,6 +250,7 @@ class Ffvae(nn.Module):
         self.scale_elbo = args.scale_elbo
         self.batch_size = args.bs
         self.weights = weights
+        self.ihm_weights = ihm_weights
 
         self.kernel_size = args.kernel_size
         self.drop_out = args.drop_out
@@ -263,24 +265,25 @@ class Ffvae(nn.Module):
         
         # VAE encoder
 
-        self.encoder  = TemporalConv(num_inputs=self.num_inputs, num_channels=self.enc_channels, kernel_size=self.kernel_size, dropout=self.drop_out)
-        self.decoder = TemporalConvDec(num_inputs=self.zdim, num_channels=self.dec_channels, kernel_size=self.kernel_size, dropout=self.drop_out)
+        self.encoder  = TemporalConv(num_inputs=self.num_inputs, num_channels=self.enc_channels, kernel_size=self.kernel_size, dropout=self.drop_out, zdim=self.zdim)
+        self.decoder = TemporalConvDec(num_inputs=self.zdim, num_channels=self.dec_channels, kernel_size=self.kernel_size, dropout=self.drop_out, zdim=self.zdim)
 
         self.encoder.to(self.device)
         self.decoder.to(self.device)
         # MLP Discriminator
         self.adv_neurons = [args.zdim] + [self.disc_channels] + [2]
         self.discriminator = MLP(self.adv_neurons, args.zdim).to(self.device)
-        self.class_neurons = ([args.zdim] + [200] + [1])
+        # both classifier and regr have output 2 
+        self.class_neurons = ([args.zdim] + [200] + [2])
             
         if self.regr_only_nonsens:
-            self.regr_neurons = ([args.zdim-3] + [200] + [1])
+            self.regr_neurons = ([args.zdim-1] + [200] + [2])
             self.regr = MLP(self.regr_neurons, args.zdim).to(self.device)
         else:
-            self.regr_neurons = ([args.zdim] + [200] + [1])
+            self.regr_neurons = ([args.zdim] + [200] + [2])
             self.regr = MLP(self.regr_neurons, args.zdim).to(self.device)
 
-        # MLP Classifier
+        # MLP Classifier # second step 
         if args.regr_model == 'mlp':
             
             self.classifier = MLP(self.class_neurons, args.zdim).to(self.device)
@@ -294,7 +297,7 @@ class Ffvae(nn.Module):
             raise NotImplementedError("regr_model not implemented")
 
         # index for sensitive attribute
-        self.n_sens = 3
+        self.n_sens = 1
         self.sens_idx = list(range(self.n_sens))
         self.nonsens_idx = [
             i for i in range(int(self.zdim)) if i not in self.sens_idx
@@ -344,32 +347,32 @@ class Ffvae(nn.Module):
         # x = (inputs + 1) / 2
 
         # encode: get q(z,b|x)
-        # (bs, z_dim, T)
+        # (bs, z_dim)
         _mu, _logvar = self.encoder(inputs)
 
         # only non-sensitive dims of latent code modeled as Gaussian
-        mu = _mu[:, self.nonsens_idx, :]
-        logvar = _logvar[:, self.nonsens_idx, :]
+        mu = _mu[:, self.nonsens_idx]
+        logvar = _logvar[:, self.nonsens_idx]
         zb = torch.zeros_like(_mu) 
-        # (bs, nonsens_dim, T)
+        # (bs, nonsens_dim)
         std = (logvar / 2).exp()
         q_zIx = torch.distributions.Normal(mu, std)
 
         # the rest are 'b', deterministically modeled as logits of sens attrs a
-        # (bs, 1, T)
-        b_logits = _mu[:, self.sens_idx, :]
+        # (bs, 1)
+        b_logits = _mu[:, self.sens_idx]
 
         # draw reparameterized sample and fill in the code
         # (bs, nonsens_dim, T)
         z = q_zIx.rsample()
         # reparametrization
-        zb[:, self.sens_idx, :] = b_logits
-        zb[:, self.nonsens_idx, :] = z
+        zb[:, self.sens_idx] = b_logits
+        zb[:, self.nonsens_idx] = z
 
         # decode: get p(x|z,b)
         # xIz_params = self.decoder(zb, "decode")  # decoder yields distn params not preds
     
-        # (bs, z_dim, T) --> (bs, 200, T)
+        # (bs, z_dim) --> (bs, 200, T)
         xIz_params = self.decoder(zb)
 
         p_xIz = torch.distributions.Normal(loc=xIz_params, scale=1.0)
@@ -377,12 +380,12 @@ class Ffvae(nn.Module):
         logp_xIz = p_xIz.log_prob(inputs)  
 
         # Tensor with shape torch.Size([bs]) 
-        recon_term = torch.stack([logp_xIz[i, :, key_mask[i] == 0].sum() for i in range(len(logp_xIz))])
+        recon_term = torch.stack([logp_xIz[i, :, :].sum() for i in range(len(logp_xIz))])
 
         # prior: get p(z)
         p_z = torch.distributions.Normal(torch.zeros_like(mu), torch.ones_like(std))
         # compute analytic KL from q(z|x) to p(z), then ELBO, torch.Size([bs])
-        kl = torch.distributions.kl_divergence(q_zIx, p_z).sum((1, 2))
+        kl = torch.distributions.kl_divergence(q_zIx, p_z).sum(1)
 
         # vector el
         elbo = recon_term - kl  
@@ -391,34 +394,39 @@ class Ffvae(nn.Module):
             elbo = elbo / inputs.shape[-1]
 
         # decode: get p(a|b)
-        # b logits shape torch.Size([bs, 1, T]), converts to [bs] based on real length 
-        b_squeeze = torch.stack([b_logits[i][:, key_mask[i]==0].mean(dim=-1)  for i in range(len(b_logits))])
+        # b logits shape torch.Size([bs, 1]), converts to [bs] based on real length 
+#         b_squeeze = torch.stack([b_logits[i].squeeze(0)[key_mask[i]==0].mean() for i in range(len(b_logits))])
         clf_losses = [
             nn.BCEWithLogitsLoss()(_b_logit.to(self.device), _a_sens.to(self.device))
             for _b_logit, _a_sens in zip(
-            b_squeeze.t(), attrs.type(torch.FloatTensor).t())]
-        # calcualte weighted clf 
-        clf_w_losses = [
-            nn.BCEWithLogitsLoss(pos_weight = self.weights[k][1]/self.weights[k][0])(_b_logit.to(self.device), _a_sens.to(self.device))
-            for k, (_b_logit, _a_sens) in enumerate(zip(
-            b_squeeze.t(), attrs.type(torch.FloatTensor).t()))]
+            b_logits.squeeze(-1).t(), attrs.type(torch.FloatTensor).t())]
         
+        # weighted 
+        clf_w_losses = [
+            nn.BCEWithLogitsLoss(pos_weight = self.weights[1]/self.weights[0])(_b_logit.to(self.device), _a_sens.to(self.device))
+            for _b_logit, _a_sens in zip(
+            b_logits.squeeze(-1).t(), attrs.type(torch.FloatTensor).t())]
+
         # compute loss
-        # (bs, T, 2)
-        logits_joint, probs_joint = self.discriminator(zb.transpose(1, 2), "discriminator")
+        # (bs, z_dim) --> (bs, 2)
+        logits_joint, probs_joint = self.discriminator(zb, "discriminator")
         # consider mask 
         # [Tensor with shape torch.Size([T1, 2]), Tensor with shape torch.Size([T2, 2])
-        logits_recover = [logits_joint[i][key_mask[i]==0]for i in range(len(logits_joint))]
+#         logits_recover = [logits_joint[i][key_mask[i]==0]for i in range(len(logits_joint))]
 #         torch.Size([bs])
-        total_corr = torch.stack([(l[:, 0] - l[:, 1]).mean() for l in logits_recover])
+        total_corr = logits_joint[:, 0] - logits_joint[:, 1]
+#     torch.stack([(l[:, 0] - l[:, 1]).mean() for l in logits_recover])
         
-        # add sofa loss classifier has to be tune as well 
+        # deal with ihm prediction loss 
         if self.regr_only_nonsens:
-            sofa_p_s1 = self.regr(mu.transpose(1, 2), "classify")
+            # (bs, z_dim) -- > (bs, 2)
+            sofa_p_s1 = self.regr(mu, "classify")
         else:
-            sofa_p_s1 = self.regr(_mu.transpose(1, 2), "classify")
-        sofa_loss = [mse_loss(sofa_p_s1[i][key_mask[i]==0], labels[i][key_mask[i]==0]) \
-            for i in range(len(sofa_p_s1))]
+            sofa_p_s1 = self.regr(_mu, "classify")
+        
+        # turn into 
+        sofa_loss = ce_loss(sofa_p_s1, labels.type(torch.cuda.LongTensor))
+        sofaw_loss = F.cross_entropy(sofa_p_s1, labels.type(torch.cuda.LongTensor), weight = self.ihm_weights)
 #         regr_loss = torch.mean(torch.stack(sofa_loss))
 
         # random elbo 10^4, totoal_corr 10^-1, clf_losses 10^-2
@@ -426,53 +434,49 @@ class Ffvae(nn.Module):
             - self.beta * elbo.mean()
             + self.gamma * total_corr.mean()
             + self.alpha * torch.stack(clf_losses).mean()
-            + self.theta * torch.stack(sofa_loss).mean()
+            + self.theta * sofa_loss
         )
 
         # shuffling minibatch indexes of b0, b1, z
         z_fake = torch.zeros_like(zb)
-        for i in range(self.n_sens):
-            z_fake[:, i, :] = zb[:, i, :][torch.randperm(zb.shape[0])]
-            
-        z_fake[:, self.n_sens:, :] = zb[:, self.n_sens:, :][torch.randperm(zb.shape[0])]
+        z_fake[:, 0] = zb[:, 0][torch.randperm(zb.shape[0])]
+        z_fake[:, 1:] = zb[:, 1:][torch.randperm(zb.shape[0])]
         z_fake = z_fake.to(self.device).detach()
 
         # discriminator
 #         (bs, T, 2 )
         logits_joint_prime, probs_joint_prime = self.discriminator(
-            z_fake.transpose(1, 2), "discriminator"
+            z_fake, "discriminator"
         )
-        logits_prime_recover = [logits_joint_prime[i][key_mask[i]==0]for i in range(len(logits_joint_prime))]
-        # 10^-1 torch.Size([])
+        ones = torch.ones(inputs.shape[0], dtype=torch.long, device=self.device)
+        zeros = torch.zeros(inputs.shape[0], dtype=torch.long, device=self.device)
         disc_loss = (
-        0.5
-        * (
-            torch.stack([F.cross_entropy(logits_recover[i], torch.zeros(logits_recover[i].shape[0], dtype=torch.long, device=self.device))
-            for i in range(len(logits_recover))]).mean()
-            + 
-            torch.stack([F.cross_entropy(logits_prime_recover[i], torch.ones(logits_prime_recover[i].shape[0], dtype=torch.long, device=self.device)) 
-            for i in range(len(logits_prime_recover))]).mean()
-        ).mean() )
+            0.5
+            * (
+                F.cross_entropy(logits_joint, zeros)
+                + F.cross_entropy(logits_joint_prime, ones)
+            ).mean()
+        )
 
         encoded_x = _mu.detach()
 
         # IMPORTANT: randomizing sensitive latent
-        for i in range(self.n_sens):
-            encoded_x[:, i, :] = torch.randn_like(encoded_x[:, i, :])
+        encoded_x[:, 0] = torch.randn_like(encoded_x[:, 0])
 
         # torch.Size([bs, T, 1])
         if self.regr_model == 'mlp':
-            sofa_p = self.classifier(encoded_x.transpose(1, 2), "classify")
+            # (bs, 20) --> (bs, 2)
+            sofa_p = self.classifier(encoded_x, "classify")
         elif self.regr_model == 'tcn':
             # encoder x (bs, z_dim, T) 
             sofa_p =  self.classifier(encoded_x)
             
-        loss = [mse_loss(sofa_p[i][key_mask[i]==0], labels[i][key_mask[i]==0]) \
-            for i in range(len(sofa_p))]
-        sofap_loss = torch.mean(torch.stack(loss))
-
+#         loss = [ce_loss(sofa_p[i][key_mask[i]==0], labels[i][key_mask[i]==0]) \
+#             for i in range(len(sofa_p))]
+        sofap_loss = ce_loss(sofa_p, labels.type(torch.cuda.LongTensor))
+    
         cost_dict = dict(
-            ffvae_cost=ffvae_loss, recon_cost=recon_term.mean(), kl_cost=kl.mean(), corr_term=total_corr.mean(), clf_term = torch.stack(clf_losses).mean(), clf_w_term = torch.stack(clf_w_losses).mean(), sofa_term = torch.stack(sofa_loss).mean(), disc_cost=disc_loss, main_cost=sofap_loss
+            ffvae_cost=ffvae_loss, recon_cost=recon_term.mean(), kl_cost=kl.mean(), corr_term=total_corr.mean(), clf_term = torch.stack(clf_losses).mean(), clf_w_term = torch.stack(clf_w_losses).mean(), sofa_term = sofa_loss, sofaw_term = sofaw_loss, disc_cost=disc_loss, main_cost=sofap_loss
         )
 
         # ffvae optimization

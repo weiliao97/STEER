@@ -55,6 +55,7 @@ if __name__ == "__main__":
     parser.add_argument("--regr_channels",  type=int, default=200, help="number of channels in the regressor")
     parser.add_argument("--regr_tcn_channels",  nargs='+', type=int, help="number of channels in the regressor if using tcn as regressor")
     parser.add_argument("--regr_sens_nonsens", action = 'store_true', help="Whether only nonsens + sens latents to predict sofa")
+    parser.add_argument("--train_regr", action = 'store_true', help = 'Whether train the regressor the second time')
     # training parameters
     parser.add_argument("--epochs", type=int, default=300, help="Number of training epochs")
     parser.add_argument("--bs", type=int, default=16, help="batch size")

@@ -22,15 +22,11 @@ plt.style.use('bmh')
 plt.rcParams["font.weight"] = "bold"
 plt.rcParams["axes.labelweight"] = "bold"
 legend_properties = {'weight':'bold', 'size': 14}
-dir_data = {'satori': '/nobackup/users/weiliao', 'colab':'/content/drive/MyDrive/ColabNotebooks/MIMIC/Extract/MEEP/Extracted_sep_2022/0910'}
-dir_save = {'satori': '/home/weiliao/FR-TSVAE', 'colab': 'content/drive/My Drive/ColabNotebooks/MIMIC/TCN/VAE'}
-
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Parser for time series VAE models")
     parser.add_argument("--device_id", type=int, default=0, help="GPU id")
-    parser.add_argument("--platform", type=str, default='colab', choices=['satori', 'colab'], help='Platform to run the code')
     # data/loss parameters
     parser.add_argument("--use_sepsis3", action = 'store_false', default= True, help="Whethe only use sepsis3 subset")
     parser.add_argument("--bucket_size", type=int, default=300, help="bucket size to group different length of time-series data")
@@ -39,8 +35,10 @@ if __name__ == "__main__":
     parser.add_argument("--alpha", type=float, default=0.5, help="coefficent for the clf loss")
     parser.add_argument("--theta", type=float, default=10, help="coefficent for the sofa loss in stage 1")
     parser.add_argument("--zdim", type=int, default=20, help="dimension of the latent space")
-    parser.add_argument("--sens_ind", type=int, default=0, help="index of the sensitive feature")
     parser.add_argument("--scale_elbo", action = 'store_true', help="Whether to scale the ELBO loss")
+    # saving dir and read dir 
+    parser.add_argument('--dir_data', type=str, default='/nobackup/users/weiliao', help='dir to read data')
+    parser.add_argument('--dir_save', type=str, default='/home/weiliao/FR-TSVAE', help='dir to save data')
     # model parameters
     parser.add_argument("--kernel_size", type=int, default=3, help="kernel size")
     parser.add_argument("--drop_out", type=float, default=0.2, help="drop out rate")
@@ -50,13 +48,11 @@ if __name__ == "__main__":
     # discriminator parameters
     parser.add_argument("--disc_channels",  type=int, default=200, help="number of channels in the discriminator")
     # regressor parameters
-    parser.add_argument("--regr_model",  type=str, default='mlp', choices=['mlp', 'tcn'], help='Model choice in sofa prediction')
     parser.add_argument("--regr_channels",  type=int, default=200, help="number of channels in the regressor")
-    parser.add_argument("--regr_tcn_channels",  nargs='+', type=int, help="number of channels in the regressor")
-    parser.add_argument("--regr_only_nonsens", action = 'store_true', help="Whether only using nonsens latents to predict sofa")
+    parser.add_argument("--regr_sens_nonsens", action = 'store_true', help="Whether only nonsens + sens latents to predict sofa")
+    parser.add_argument("--train_regr", action = 'store_true', help = 'Whether train the regressor the second time')
     # training parameters
     parser.add_argument("--epochs", type=int, default=300, help="Number of training epochs")
-    parser.add_argument("--data_batching", type=str, default='close', choices=['same', 'close', 'random'], help='How to batch data')
     parser.add_argument("--bs", type=int, default=16, help="batch size")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--patience", type=int, default=20, help="Patience epochs for early stopping.")
@@ -66,17 +62,17 @@ if __name__ == "__main__":
     device = torch.device("cuda:%d"%args.device_id if torch.cuda.is_available() else "cpu")
     arg_dict = vars(args)
     workname = date + "_" +  args.checkpoint
-    utils.creat_checkpoint_folder(dir_save[args.platform] + '/checkpoints/' + workname, 'params.json', arg_dict)
+    utils.creat_checkpoint_folder(args.dir_save + '/checkpoints/' + workname, 'params.json', arg_dict)
 
     # load data
-    meep_mimic = np.load(dir_data[args.platform] + '/MIMIC_compile_0911_2022.npy', \
+    meep_mimic = np.load(args.dir_data + '/MIMIC_compile_0911_2022.npy', \
                     allow_pickle=True).item()
     train_vital = meep_mimic ['train_head']
     dev_vital = meep_mimic ['dev_head']
     test_vital = meep_mimic ['test_head']
-    mimic_static = np.load(dir_data[args.platform] + '/MIMIC_static_0922_2022.npy', \
+    mimic_static = np.load(args.dir_data + '/MIMIC_static_0922_2022.npy', \
                             allow_pickle=True).item()
-    mimic_target = np.load(dir_data[args.platform] + '/MIMIC_target_0922_2022.npy', \
+    mimic_target = np.load(args.dir_data+ '/MIMIC_target_0922_2022.npy', \
                             allow_pickle=True).item()
         
     train_head, train_static, train_sofa, train_id =  utils.crop_data_target('mimic', train_vital, mimic_target, mimic_static, 'train', args.sens_ind)
@@ -84,13 +80,9 @@ if __name__ == "__main__":
     test_head, test_static, test_sofa, test_id =  utils.crop_data_target('mimic', test_vital, mimic_target, mimic_static, 'test',  args.sens_ind)
 
     if args.use_sepsis3 == True:
-        train_head, train_static, train_sofa, train_id = utils.filter_sepsis('mimic', train_head, train_static, train_sofa, train_id, args.platform)
-        dev_head, dev_static, dev_sofa, dev_id = utils.filter_sepsis('mimic', dev_head, dev_static, dev_sofa, dev_id, args.platform)
-        test_head, test_static, test_sofa, test_id = utils.filter_sepsis('mimic', test_head, test_static, test_sofa, test_id, args.platform)
-
-    # build model
-#     model = models.Ffvae(args)
-#     torch.save(model.state_dict(), dir_save[args.platform] + '/start_weights_%d.pt'%args.device_id)
+        train_head, train_static, train_sofa, train_id = utils.filter_sepsis('mimic', train_head, train_static, train_sofa, train_id, args.dir_data)
+        dev_head, dev_static, dev_sofa, dev_id = utils.filter_sepsis('mimic', dev_head, dev_static, dev_sofa, dev_id, args.dir_data)
+        test_head, test_static, test_sofa, test_id = utils.filter_sepsis('mimic', test_head, test_static, test_sofa, test_id, args.dir_data)
 
     # 10-fold cross validation
     trainval_head = train_head + dev_head
@@ -132,9 +124,9 @@ if __name__ == "__main__":
         model = models.Ffvae(args, weights_per_class)
         
         if c_fold == 0: 
-            torch.save(model.state_dict(), dir_save[args.platform] + '/start_weights_%d.pt'%args.device_id)
+            torch.save(model.state_dict(), args.dir_save + '/start_weights_%d.pt'%args.device_id)
         else:
-            model.load_state_dict(torch.load(dir_save[args.platform] + '/start_weights_%d.pt'%args.device_id))
+            model.load_state_dict(torch.load(args.dir_save + '/start_weights_%d.pt'%args.device_id))
         # df to record loss
         train_loss = pd.DataFrame(columns=['ffvae_cost', 'recon_cost', 'kl_cost', 'corr_term', 'clf_term', 'clf_w_term', 'sofa_term', 'disc_cost', 'sofap_loss'])
         dev_loss = pd.DataFrame(columns=['ffvae_cost', 'recon_cost', 'kl_cost', 'corr_term', 'clf_term',  'clf_w_term', 'sofa_term', 'disc_cost', 'sofap_loss'])
@@ -146,7 +138,6 @@ if __name__ == "__main__":
         best_corr_loss = 1e4
         patience = 0
         start_time = timeit.default_timer()
-        saved = False
         for j in range(args.epochs):
             model.train()
             average_meters = AverageMeterSet()
@@ -209,116 +200,95 @@ if __name__ == "__main__":
             if abs(average_meters.averages()['corr_term/avg']) < best_corr_loss: 
                 best_corr_loss = abs(average_meters.averages()['corr_term/avg'])
                 best_corr_model =  copy.deepcopy(model.state_dict())
-            
-            # save if code cannot be completely ran 
-            elapsed = timeit.default_timer() - start_time
-            # threshold 11:45 
-            if elapsed > 42300 and (not saved):
-                torch.save(best_model_state, dir_save[args.platform] + '/checkpoints/' + workname + '/stage1_fold_%d_epoch%d.pt'%(c_fold, j))
-                torch.save(best_clf_model, dir_save[args.platform] + '/checkpoints/' + workname + '/stage1_clf_fold_%d_epoch%d.pt'%(c_fold, j))
-                torch.save(best_clf_w_model, dir_save[args.platform] + '/checkpoints/' + workname + '/stage1_clfw_fold_%d_epoch%d.pt'%(c_fold, j))
-                torch.save(best_sofa_model, dir_save[args.platform] + '/checkpoints/' + workname + '/stage1_sofa_fold_%d_epoch%d.pt'%(c_fold, j))
-                torch.save(best_corr_model, dir_save[args.platform] + '/checkpoints/' + workname + '/stage1_corr_fold_%d_epoch%d.pt'%(c_fold, j))
-                # save pd df, show plot, save plot
-                plt.figure()
-                axs = train_loss.plot(figsize=(12, 14), subplots=True)
-                plt.savefig(dir_save[args.platform] + '/checkpoints/' + workname + '/train_loss_fold%d.eps'%c_fold, format='eps', bbox_inches = 'tight', pad_inches = 0.1, dpi=1200)
-                plt.figure()
-                axs = dev_loss.plot(figsize=(12, 14), subplots=True)
-                plt.savefig(dir_save[args.platform] + '/checkpoints/' + workname + '/dev_loss_fold%d.eps'%c_fold, format='eps', bbox_inches = 'tight', pad_inches = 0.1, dpi=1200)
-                plt.show()
-                with open(os.path.join(dir_save[args.platform] + '/checkpoints/' + workname, 'train_loss_fold%d.pkl'%c_fold), 'wb') as f:
-                    pickle.dump(train_loss, f)
-                with open(os.path.join(dir_save[args.platform] + '/checkpoints/' + workname, 'val_loss_fold%d.pkl'%c_fold), 'wb') as f:
-                    pickle.dump(dev_loss, f)
-                saved = True
-                
-        torch.save(best_model_state, dir_save[args.platform] + '/checkpoints/' + workname + '/stage1_fold_%d_epoch%d.pt'%(c_fold, j))
-        torch.save(best_clf_model, dir_save[args.platform] + '/checkpoints/' + workname + '/stage1_clf_fold_%d_epoch%d.pt'%(c_fold, j))
-        torch.save(best_clf_w_model, dir_save[args.platform] + '/checkpoints/' + workname + '/stage1_clfw_fold_%d_epoch%d.pt'%(c_fold, j))
-        torch.save(best_sofa_model, dir_save[args.platform] + '/checkpoints/' + workname + '/stage1_sofa_fold_%d_epoch%d.pt'%(c_fold, j))
-        torch.save(best_corr_model, dir_save[args.platform] + '/checkpoints/' + workname + '/stage1_corr_fold_%d_epoch%d.pt'%(c_fold, j))
+                      
+        torch.save(best_model_state, args.dir_save + '/checkpoints/' + workname + '/stage1_fold_%d_epoch%d.pt'%(c_fold, j))
+        torch.save(best_clf_model, args.dir_save + '/checkpoints/' + workname + '/stage1_clf_fold_%d_epoch%d.pt'%(c_fold, j))
+        torch.save(best_clf_w_model, args.dir_save + '/checkpoints/' + workname + '/stage1_clfw_fold_%d_epoch%d.pt'%(c_fold, j))
+        torch.save(best_sofa_model, args.dir_save + '/checkpoints/' + workname + '/stage1_sofa_fold_%d_epoch%d.pt'%(c_fold, j))
+        torch.save(best_corr_model, args.dir_save + '/checkpoints/' + workname + '/stage1_corr_fold_%d_epoch%d.pt'%(c_fold, j))
 
         # save pd df, show plot, save plot
         plt.figure()
         axs = train_loss.plot(figsize=(12, 14), subplots=True)
-        plt.savefig(dir_save[args.platform] + '/checkpoints/' + workname + '/train_loss_fold%d.eps'%c_fold, format='eps', bbox_inches = 'tight', pad_inches = 0.1, dpi=1200)
+        plt.savefig(args.dir_save + '/checkpoints/' + workname + '/train_loss_fold%d.eps'%c_fold, format='eps', bbox_inches = 'tight', pad_inches = 0.1, dpi=1200)
         plt.figure()
         axs = dev_loss.plot(figsize=(12, 14), subplots=True)
-        plt.savefig(dir_save[args.platform] + '/checkpoints/' + workname + '/dev_loss_fold%d.eps'%c_fold, format='eps', bbox_inches = 'tight', pad_inches = 0.1, dpi=1200)
+        plt.savefig(args.dir_save + '/checkpoints/' + workname + '/dev_loss_fold%d.eps'%c_fold, format='eps', bbox_inches = 'tight', pad_inches = 0.1, dpi=1200)
         plt.show()
-        with open(os.path.join(dir_save[args.platform] + '/checkpoints/' + workname, 'train_loss_fold%d.pkl'%c_fold), 'wb') as f:
+        with open(os.path.join(args.dir_save + '/checkpoints/' + workname, 'train_loss_fold%d.pkl'%c_fold), 'wb') as f:
             pickle.dump(train_loss, f)
-        with open(os.path.join(dir_save[args.platform] + '/checkpoints/' + workname, 'val_loss_fold%d.pkl'%c_fold), 'wb') as f:
+        with open(os.path.join(args.dir_save + '/checkpoints/' + workname, 'val_loss_fold%d.pkl'%c_fold), 'wb') as f:
             pickle.dump(dev_loss, f)
 
         train_regr_loss = pd.DataFrame(columns=['ffvae_cost', 'recon_cost', 'kl_cost', 'corr_term', 'clf_term', 'sofa_term',  'disc_cost', 'sofap_loss'])
         dev_regr_loss = pd.DataFrame(columns=['ffvae_cost', 'recon_cost', 'kl_cost', 'corr_term', 'clf_term', 'sofa_term', 'disc_cost', 'sofap_loss'])
         best_loss = 1e4
         patience = 0
-        # train from best clf model
-        model.load_state_dict(torch.load(dir_save[args.platform] + '/checkpoints/%s/stage1_clf_fold_%d_epoch%d.pt'%(workname, c_fold, j)))
-        
-        # train the regression model
-        for j in range(args.epochs): 
 
-            model.train()
-            average_meters = AverageMeterSet()
+        if args.train_regr:
+            # train from best clf model
+            model.load_state_dict(torch.load(args.dir_save + '/checkpoints/%s/stage1_clf_fold_%d_epoch%d.pt'%(workname, c_fold, j)))
+            
+            # train the regression model
+            for j in range(args.epochs): 
 
-            for vitals, static, target, train_ids, key_mask in train_dataloader:
-                vitals = vitals.to(device)
-                static = static.to(device)
-                target = target.to(device)
-                key_mask = key_mask.to(device)
+                model.train()
+                average_meters = AverageMeterSet()
 
-                sofap, cost_dict = model(vitals, key_mask, target, static, "train")
-
-                stats = dict((n, c.item()) for (n, c) in cost_dict.items())
-                average_meters.update_dict(stats)
-                
-            # print and record loss 
-            train_regr_loss.loc[len(train_regr_loss)] = average_meters.averages().values()
-            print("EPOCH: ", j, "TRAIN AVGs: ", average_meters.averages())
-
-            model.eval()
-            average_meters = AverageMeterSet()
-            with torch.no_grad():
-                for vitals, static, target, train_ids, key_mask in dev_dataloader:
+                for vitals, static, target, train_ids, key_mask in train_dataloader:
                     vitals = vitals.to(device)
                     static = static.to(device)
                     target = target.to(device)
                     key_mask = key_mask.to(device)
 
-                    _, cost_dict = model(vitals, key_mask, target, static, "test")
+                    sofap, cost_dict = model(vitals, key_mask, target, static, "train")
 
                     stats = dict((n, c.item()) for (n, c) in cost_dict.items())
                     average_meters.update_dict(stats)
-                
-            # print and record loss 
-            dev_regr_loss.loc[len(dev_regr_loss)] = average_meters.averages().values()
-            print("EPOCH: ", j, "VAL AVGs: ", average_meters.averages())
+                    
+                # print and record loss 
+                train_regr_loss.loc[len(train_regr_loss)] = average_meters.averages().values()
+                print("EPOCH: ", j, "TRAIN AVGs: ", average_meters.averages())
 
-            if average_meters.averages()['main_cost/avg'] < best_loss:
-                patience = 0 
-                best_loss = average_meters.averages()['main_cost/avg']
-                best_model_state = copy.deepcopy(model.state_dict())
-            else:
-                patience += 1 
-                if patience >= args.patience:
-                    print("Epoch %d :"%j, "Early stopped.")
-                    torch.save(best_model_state, dir_save[args.platform] + '/checkpoints/' + workname + '/stage2_fold_%d_epoch%d.pt'%(c_fold, j))
-                    break 
+                model.eval()
+                average_meters = AverageMeterSet()
+                with torch.no_grad():
+                    for vitals, static, target, train_ids, key_mask in dev_dataloader:
+                        vitals = vitals.to(device)
+                        static = static.to(device)
+                        target = target.to(device)
+                        key_mask = key_mask.to(device)
 
-        # save pd df, show plot, save plot
-        plt.figure()
-        axs = train_regr_loss.plot(figsize=(12, 14), subplots=True)
-        plt.savefig(dir_save[args.platform] + '/checkpoints/' + workname + '/train_regr_loss_fold%d.eps'%c_fold, format='eps', bbox_inches = 'tight', pad_inches = 0.1, dpi=1200)
-        plt.figure()
-        axs = dev_regr_loss.plot(figsize=(12, 14), subplots=True)
-        plt.savefig(dir_save[args.platform] + '/checkpoints/' + workname + '/dev_regr_loss_fold%d.eps'%c_fold, format='eps', bbox_inches = 'tight', pad_inches = 0.1, dpi=1200)
-        plt.show()
-        with open(os.path.join(dir_save[args.platform] + '/checkpoints/' + workname, 'train_regr_loss_fold%d.pkl'%c_fold), 'wb') as f:
-            pickle.dump(train_regr_loss, f)
-        with open(os.path.join(dir_save[args.platform] + '/checkpoints/' + workname, 'val_regr_loss_fold%d.pkl'%c_fold), 'wb') as f:
-            pickle.dump(dev_regr_loss, f)
+                        _, cost_dict = model(vitals, key_mask, target, static, "test")
+
+                        stats = dict((n, c.item()) for (n, c) in cost_dict.items())
+                        average_meters.update_dict(stats)
+                    
+                # print and record loss 
+                dev_regr_loss.loc[len(dev_regr_loss)] = average_meters.averages().values()
+                print("EPOCH: ", j, "VAL AVGs: ", average_meters.averages())
+
+                if average_meters.averages()['main_cost/avg'] < best_loss:
+                    patience = 0 
+                    best_loss = average_meters.averages()['main_cost/avg']
+                    best_model_state = copy.deepcopy(model.state_dict())
+                else:
+                    patience += 1 
+                    if patience >= args.patience:
+                        print("Epoch %d :"%j, "Early stopped.")
+                        torch.save(best_model_state, args.dir_save + '/checkpoints/' + workname + '/stage2_fold_%d_epoch%d.pt'%(c_fold, j))
+                        break 
+
+            # save pd df, show plot, save plot
+            plt.figure()
+            axs = train_regr_loss.plot(figsize=(12, 14), subplots=True)
+            plt.savefig(args.dir_save + '/checkpoints/' + workname + '/train_regr_loss_fold%d.eps'%c_fold, format='eps', bbox_inches = 'tight', pad_inches = 0.1, dpi=1200)
+            plt.figure()
+            axs = dev_regr_loss.plot(figsize=(12, 14), subplots=True)
+            plt.savefig(args.dir_save + '/checkpoints/' + workname + '/dev_regr_loss_fold%d.eps'%c_fold, format='eps', bbox_inches = 'tight', pad_inches = 0.1, dpi=1200)
+            plt.show()
+            with open(os.path.join(args.dir_save + '/checkpoints/' + workname, 'train_regr_loss_fold%d.pkl'%c_fold), 'wb') as f:
+                pickle.dump(train_regr_loss, f)
+            with open(os.path.join(args.dir_save + '/checkpoints/' + workname, 'val_regr_loss_fold%d.pkl'%c_fold), 'wb') as f:
+                pickle.dump(dev_regr_loss, f)
 

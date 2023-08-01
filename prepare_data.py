@@ -59,44 +59,13 @@ class RaceTrainSampler(Sampler):
                 data_buckets[pid] = [p]
 
         for k in data_buckets.keys():
-            # if self.args.race_sample == 1: 
-            # # use class label 1 as the lower basis for white 
-            # #num of 1s which is black 
-            #     ind_pos =  np.asarray([i for i in data_buckets[k] if self.label[i] == 1 ])
-            #     num_pos= len(ind_pos)
-            #     # other is 0: asian and 2: hispanic
-            #     ind_other =  np.asarray([i for i in data_buckets[k] if self.label[i] == 0])
-            #     # 3 is white, which needs to be downsampled 
-            #     ind_neg =  [i for i in data_buckets[k] if self.label[i] == 2 ]
-            #     num_neg = min(max(1, num_pos), len(ind_neg))
 
-            #     neg_choice = np.random.choice(ind_neg, num_neg, replace=False)
-
-            #     data_buckets[k] = np.concatenate((ind_pos, neg_choice, ind_other))
-
-            # elif self.args.race_sample == 0:  # use class label 0 asian as the lower bound 
-                # after adjustment, 0 is black, 1 is white 
-                # ind_pos =  np.asarray([i for i in data_buckets[k] if self.label[i] == 1 ])
-
-                # other is 0: asian and 2: hispanic
-                # print(data_buckets)
-#             print(self.label)
-            ind_black =  np.asarray([i for i in data_buckets[k] if self.label[i][2] == 1])
-            num_black= len(ind_black)
-
-            # ind_hispanic =  np.asarray([i for i in data_buckets[k] if self.label[i] == 2])
-
-            # 2 is white, which needs to be downsampled 
-            # 1 is white, which needs to be downsampled 
-            ind_neg =  [i for i in data_buckets[k] if self.label[i][2] == 0 ]
-
-            num_neg = min(max(1, num_black), len(ind_neg)) # white
-            # num_pos = min(max(1, num_asian), len(ind_pos)) # black
-            # downsample bothe neg and pos 
-            neg_choice = np.random.choice(ind_neg, num_neg, replace=False)
-            # pos_choice = np.random.choice(ind_pos, num_pos, replace=False)
-
-            data_buckets[k] = np.concatenate((neg_choice, ind_black))
+            ind_blackaf =  np.asarray([i for i in data_buckets[k] if self.label[i] == 1])
+            num_blackaf= len(ind_blackaf)
+            ind_white =  [i for i in data_buckets[k] if self.label[i] == 0 ]
+            num_white = min(max(1, num_blackaf), len(ind_white)) # white
+            neg_choice = np.random.choice(ind_white, num_white, replace=False)
+            data_buckets[k] = np.concatenate((neg_choice, ind_blackaf))
 
         iter_list = []
         for k in data_buckets.keys():
@@ -369,90 +338,35 @@ def get_data_loader(args, train_head, dev_head, test_head,
     len_range = [i for i in range(0, 219)]
     # bin is [0, 1), [1, 2), ... [217, 218]
     train_hist, _ = np.histogram(train_len, bins=len_range)
-    val_hist, _ = np.histogram(val_len, bins=len_range)
 
-    if args.data_batching == 'random':
+    batch_sizes= args.bs
+    # same bucket boudaries have less data for val and test in one bucket 
+    val_batch_sizes = args.bs//8
+    test_batch_sizes = args.bs//4
 
-        train_dataloader = data.DataLoader(train_dataset, batch_size=args.bs, collate_fn=col_fn,
-                                drop_last=False, pin_memory=False)  
-        dev_dataloader = data.DataLoader(val_dataset, batch_size=args.bs, collate_fn=col_fn,
-                                drop_last=False, pin_memory=False) 
-        test_dataloader = data.DataLoader(test_dataset, batch_size=args.bs, collate_fn=col_fn,
-                                drop_last=False, pin_memory=False) 
-        
-    elif args.data_batching == 'same':
-        # same means each batch has the same length of time-series data, which constrains the batch size
-        batch_sizes=6
-        val_batch_sizes = 1
-        test_batch_sizes = 1
+    bucket_boundaries = generate_buckets(args.bucket_size, train_hist)
+    
+    if args.sens_ind == 1:
+        # ne need to resample if using age as a target
+        sampler = EvalSampler(train_head, train_static, bucket_boundaries, batch_sizes)
+    elif args.sens_ind == 21:
+        # if race as the target 
+        print(len(train_head))
+        sampler = RaceTrainSampler(args, train_head, train_static, bucket_boundaries, batch_sizes)
+    else:
+        sampler = TrainSampler(train_head, train_static, bucket_boundaries, batch_sizes)
 
-        bucket_boundaries = [i for i in range(1, 219)]
-        val_bucket_boundaries = [i for i in range(len(val_hist)) if val_hist[i]>0 ] + [219]
+    dev_sampler = EvalSampler(dev_head, dev_static, bucket_boundaries, val_batch_sizes)
+    test_sampler = EvalSampler(test_head, test_static, bucket_boundaries, test_batch_sizes)
 
-        sampler = BySequenceLengthSampler(train_head, bucket_boundaries, batch_sizes)
-        dev_sampler = BySequenceLengthSampler(dev_head, val_bucket_boundaries, val_batch_sizes)
-        test_sampler = BySequenceLengthSampler(test_head, bucket_boundaries, test_batch_sizes)
-
-        train_dataloader = data.DataLoader(train_dataset, batch_size=1, 
-                                batch_sampler=sampler, collate_fn=col_fn,
-                             drop_last=False, pin_memory=False)
-        dev_dataloader = data.DataLoader(val_dataset, batch_size=1, 
-                                batch_sampler=dev_sampler, collate_fn=col_fn,
-                                drop_last=False, pin_memory=False)
-        test_dataloader = data.DataLoader(test_dataset, batch_size=1, 
-                                batch_sampler=test_sampler, collate_fn=col_fn,
-                                drop_last=False, pin_memory=False)
-
-    elif args.data_batching == 'close':
-
-        batch_sizes= args.bs
-        # same bucket boudaries have less data for val and test in one bucket 
-        val_batch_sizes = args.bs//8
-        test_batch_sizes = args.bs//4
-
-        bucket_boundaries = generate_buckets(args.bucket_size, train_hist)
-        
-        if args.sens_ind == 1:
-            # ne need to resample if using age as a target
-            sampler = EvalSampler(train_head, train_static, bucket_boundaries, batch_sizes)
-        elif args.sens_ind == 21:
-            # if race as the target 
-            print(len(train_head))
-            sampler = RaceTrainSampler(args, train_head, train_static, bucket_boundaries, batch_sizes)
-        else:
-            sampler = TrainSampler(train_head, train_static, bucket_boundaries, batch_sizes)
-
-        dev_sampler = EvalSampler(dev_head, dev_static, bucket_boundaries, val_batch_sizes)
-        test_sampler = EvalSampler(test_head, test_static, bucket_boundaries, test_batch_sizes)
-
-        train_dataloader = data.DataLoader(train_dataset, batch_size=1, collate_fn=col_fn,
-                                batch_sampler=sampler, 
-                                drop_last=False, pin_memory=False)
-        dev_dataloader = data.DataLoader(val_dataset, batch_size=1, collate_fn=col_fn,
-                                batch_sampler=dev_sampler, 
-                                drop_last=False, pin_memory=False)
-        test_dataloader = data.DataLoader(test_dataset, batch_size=1, collate_fn=col_fn,
-                                batch_sampler=test_sampler, 
-                                drop_last=False, pin_memory=False)
-        
+    train_dataloader = data.DataLoader(train_dataset, batch_size=1, collate_fn=col_fn,
+                            batch_sampler=sampler, 
+                            drop_last=False, pin_memory=False)
+    dev_dataloader = data.DataLoader(val_dataset, batch_size=1, collate_fn=col_fn,
+                            batch_sampler=dev_sampler, 
+                            drop_last=False, pin_memory=False)
+    test_dataloader = data.DataLoader(test_dataset, batch_size=1, collate_fn=col_fn,
+                            batch_sampler=test_sampler, 
+                            drop_last=False, pin_memory=False)
+    
     return train_dataloader, dev_dataloader, test_dataloader
-
-# def get_huge_dataloader(args, train_head, dev_head, test_head, \
-#                 train_sofa_tail, dev_sofa_tail, test_sofa_tail):
-    
-#     total_head = train_head + dev_head + test_head
-#     total_target = np.concatenate((train_sofa_tail, dev_sofa_tail, test_sofa_tail), axis=0)
-#     train_len = [total_head[i].shape[1] for i in range(len(train_head))]
-#     # start_bin 
-#     bin_start = 0 
-#     len_range = [i for i in range(bin_start, 219+bin_start)]
-#     train_hist, _ = np.histogram(train_len, bins=len_range)
-    
-#     bucket_boundaries = generate_buckets(args.bucket_size, train_hist)
-
-#     train_dataset = Dataset(total_head, total_target)
-#     sampler = BySequenceLengthSampler(total_head, bucket_boundaries, args.bs)
-#     dataloader = data.DataLoader(train_dataset, batch_size=1, collate_fn=col_fn,
-#                                 batch_sampler=sampler, 
-#                                 drop_last=False, pin_memory=False)
-#     return dataloader

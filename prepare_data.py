@@ -60,9 +60,9 @@ class RaceTrainSampler(Sampler):
 
         for k in data_buckets.keys():
 
-            ind_blackaf =  np.asarray([i for i in data_buckets[k] if self.label[i] == 1])
+            ind_blackaf =  np.asarray([i for i in data_buckets[k] if self.label[i][2] == 1])
             num_blackaf= len(ind_blackaf)
-            ind_white =  [i for i in data_buckets[k] if self.label[i] == 0 ]
+            ind_white =  [i for i in data_buckets[k] if self.label[i][2] == 0 ]
             num_white = min(max(1, num_blackaf), len(ind_white)) # white
             neg_choice = np.random.choice(ind_white, num_white, replace=False)
             data_buckets[k] = np.concatenate((neg_choice, ind_blackaf))
@@ -345,17 +345,8 @@ def get_data_loader(args, train_head, dev_head, test_head,
     test_batch_sizes = args.bs//4
 
     bucket_boundaries = generate_buckets(args.bucket_size, train_hist)
-    
-    if args.sens_ind == 1:
-        # ne need to resample if using age as a target
-        sampler = EvalSampler(train_head, train_static, bucket_boundaries, batch_sizes)
-    elif args.sens_ind == 21:
-        # if race as the target 
-        print(len(train_head))
-        sampler = RaceTrainSampler(args, train_head, train_static, bucket_boundaries, batch_sizes)
-    else:
-        sampler = TrainSampler(train_head, train_static, bucket_boundaries, batch_sizes)
-
+ 
+    sampler = RaceTrainSampler(args, train_head, train_static, bucket_boundaries, batch_sizes)
     dev_sampler = EvalSampler(dev_head, dev_static, bucket_boundaries, val_batch_sizes)
     test_sampler = EvalSampler(test_head, test_static, bucket_boundaries, test_batch_sizes)
 

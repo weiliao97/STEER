@@ -77,7 +77,7 @@ def creat_checkpoint_folder(target_path, target_file, data):
     with open(os.path.join(target_path, target_file), 'w') as f:
         json.dump(data, f)
 
-def crop_data_target(database, vital, target_dict, static_dict, mode, target_index):
+def crop_data_target(database, vital, target_dict, static_dict, mode):
     '''
     vital: a list of nd array [[200, 81], [200, 93], ...] 
     target_dict: dict of SOFA score: {'train': {30015933: [81, 1], 30016009: [79, 1], ...}, 'dev': }
@@ -104,68 +104,26 @@ def crop_data_target(database, vital, target_dict, static_dict, mode, target_ind
     sofa_tail = [target_dict[mode][j][24:]/15 for j in stayids]
     static_key = 'static_' + mode
 
-    if database == 'mimic':
+    if database == 'mimic': #only works for mimic for now 
         train_filter = [vital[i][:, :-24] for i, m in enumerate(length) if m >24]
-        if target_index == 21: # race 
-            train_target = [np.nonzero(static_dict[static_key].loc[idx[:, :, j]].iloc[:, 21:].values)[1] for j in stayids]
-            sub_ind = [i for i, m in enumerate(train_target) if m == 2 or m == 5] # 2 is balck, 5 is white 
-            race_dict = {2: 1, 5:0}
-            # a list of target class
-            train_targets = [race_dict[train_target[i][0]]for i in sub_ind]
-            train_filters = [train_filter[i] for i in sub_ind]
-            sofa_tails = [sofa_tail[i] for i in sub_ind]
-            stayidss = [stayids[i] for i in sub_ind]
+        # race: 2 is balck, 5 is white 
+        # shape [1,6] then use nonzero, after e.g.array([5])
+        train_target = [np.nonzero(static_dict[static_key].loc[idx[:, :, j]].iloc[:, 21:].values)[1] for j in stayids]
+        sub_ind = [i for i, m in enumerate(train_target) if m == 2 or m == 5]
+        race_dict = {2: 1, 5:0}
+        # a list of target class
+        train_targets = [race_dict[train_target[i][0]] for i in sub_ind]
+        train_filters = [train_filter[i] for i in sub_ind]
+        sofa_tails = [sofa_tail[i] for i in sub_ind]
+        stayidss = [stayids[i] for i in sub_ind]
+        # 0: sex, 1: age 
+        train_target_1 = [static_dict[static_key].loc[idx[:, :, j]].iloc[:, 1].values[0] for j in stayidss]
+        train_target_1 = [1 if i >= 0.1097 else 0 for i in train_target_1]
+        train_target_0 = [static_dict[static_key].loc[idx[:, :, j]].iloc[:, 0].values[0] for j in stayidss]
+        # np array (N, 3)
+        total_target = np.asarray(list(zip(train_target_0, train_target_1, train_targets)))
 
-            return train_filters, train_targets, sofa_tails, stayidss
-
-        elif target_index == 1: # age, binarize it
-            # age median is 0.1097
-            train_target = [static_dict[static_key].loc[idx[:, :, j]].iloc[:, 1].values[0] for j in stayids]
-            train_target = [1 if i >= 0.1097 else 0 for i in train_target]
-            return train_filter, train_target, sofa_tail, stayids
-
-        else:
-            # a list of target class
-            train_target = [static_dict[static_key].loc[idx[:, :, j]].iloc[:, target_index].values[0] for j in stayids]
-            return train_filter, train_target, sofa_tail, stayids
-
-    else: # eicu 
-        train_filter = [vital[i][:, :-24] for i, m in enumerate(length) if m >24]
-        # for eicu eicu_static['static_train'].loc[141168][1] becomes a value 
-        if target_index == 21: # race 
-            # shape [1,6] then use nonzero, after e.g.array([5])
-            train_target = [np.nonzero(static_dict[static_key].loc[j][21:].values)[0] for j in stayids]
-            sub_ind = [i for i, m in enumerate(train_target) if m == 2 or m == 5] # 2 is balck, 5 is white 
-            race_dict = {2: 1, 5:0}
-            # a list of target class
-            train_targets = [race_dict[train_target[i][0]]for i in sub_ind]
-            train_filters = [train_filter[i] for i in sub_ind]
-            sofa_tails = [sofa_tail[i] for i in sub_ind]
-            stayidss = [stayids[i] for i in sub_ind]
-
-            return train_filters, train_targets, sofa_tails, stayidss, 
-
-        elif target_index == 1: # age, binarize it
-            # age median is 0.1097
-            train_target = [static_dict[static_key].loc[j][1] for j in stayids]
-            train_target = [1 if i >= 0.1097 else 0 for i in train_target]
-
-            return train_filter, train_target, sofa_tail, stayids 
-
-        else:
-            # a list of target class
-            train_target = [static_dict[static_key].loc[j][target_index] for j in stayids]
-
-        if target_index == 0: # eicu gender has unknown 
-            known_ids = [k for k, i in enumerate(stayids) if train_target[k] != 2.0]
-            train_filter = [train_filter[i] for i in known_ids]
-            sofa_tail = [sofa_tail[i] for i in known_ids]
-            stayids= [stayids[i] for i in known_ids]
-            train_target= [train_target[i] for i in known_ids]
-
-            return train_filter, train_target, sofa_tail, stayids
-
-        return train_filter, train_target, sofa_tail, stayids
+        return train_filters, total_target, sofa_tails, stayidss
 
 def filter_sepsis(database, vital, static, sofa, ids, datadir): 
     if database == 'mimic':

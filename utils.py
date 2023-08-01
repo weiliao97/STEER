@@ -2,7 +2,6 @@ import os
 import json 
 import numpy as np
 import pandas as pd
-dir_csv = {'satori': '/nobackup/users/weiliao', 'colab':'/content/drive/My Drive/ColabNotebooks/MIMIC/TCN'}
 
 class AverageMeterSet:
     """Computes average values of metrics"""
@@ -106,10 +105,9 @@ def crop_data_target(database, vital, target_dict, static_dict, mode, target_ind
 
     if database == 'mimic':
         train_filter = [vital[i][:, :-24] for i, m in enumerate(length) if m >24]
-        if target_index == 21: # race: 2 is balck, 5 is white 
-            # shape [1,6] then use nonzero, after e.g.array([5])
+        if target_index == 21: # race 
             train_target = [np.nonzero(static_dict[static_key].loc[idx[:, :, j]].iloc[:, 21:].values)[1] for j in stayids]
-            sub_ind = [i for i, m in enumerate(train_target) if m == 2 or m == 5]
+            sub_ind = [i for i, m in enumerate(train_target) if m == 2 or m == 5] # 2 is balck, 5 is white 
             race_dict = {2: 1, 5:0}
             # a list of target class
             train_targets = [race_dict[train_target[i][0]]for i in sub_ind]
@@ -130,13 +128,13 @@ def crop_data_target(database, vital, target_dict, static_dict, mode, target_ind
             train_target = [static_dict[static_key].loc[idx[:, :, j]].iloc[:, target_index].values[0] for j in stayids]
             return train_filter, train_target, sofa_tail, stayids
 
-    else: 
+    else: # eicu 
         train_filter = [vital[i][:, :-24] for i, m in enumerate(length) if m >24]
         # for eicu eicu_static['static_train'].loc[141168][1] becomes a value 
-        if target_index == 21: # race: 2 is balck, 5 is white 
+        if target_index == 21: # race 
             # shape [1,6] then use nonzero, after e.g.array([5])
             train_target = [np.nonzero(static_dict[static_key].loc[j][21:].values)[0] for j in stayids]
-            sub_ind = [i for i, m in enumerate(train_target) if m == 2 or m == 5]
+            sub_ind = [i for i, m in enumerate(train_target) if m == 2 or m == 5] # 2 is balck, 5 is white 
             race_dict = {2: 1, 5:0}
             # a list of target class
             train_targets = [race_dict[train_target[i][0]]for i in sub_ind]
@@ -157,7 +155,7 @@ def crop_data_target(database, vital, target_dict, static_dict, mode, target_ind
             # a list of target class
             train_target = [static_dict[static_key].loc[j][target_index] for j in stayids]
 
-        if target_index == 0: # eicu gender has unknown:
+        if target_index == 0: # eicu gender has unknown 
             known_ids = [k for k, i in enumerate(stayids) if train_target[k] != 2.0]
             train_filter = [train_filter[i] for i in known_ids]
             sofa_tail = [sofa_tail[i] for i in known_ids]
@@ -168,20 +166,12 @@ def crop_data_target(database, vital, target_dict, static_dict, mode, target_ind
 
         return train_filter, train_target, sofa_tail, stayids
 
-# def crop_data_target_eicu(vital, target_dict, mode):
-#     length = [i.shape[-1] for i in vital]
-    
-#     all_train_id = list(target_dict[mode].keys())
-#     stayids = [all_train_id[i] for i, m in enumerate(length) if m >24]
-#     sofa_tail = [target_dict[mode][j][24:]/15 for j in stayids ]
-#     return train_filter, sofa_tail, stayids
-
-def filter_sepsis(database, vital, static, sofa, ids, plf): 
+def filter_sepsis(database, vital, static, sofa, ids, datadir): 
     if database == 'mimic':
-        id_df = pd.read_csv(dir_csv[plf] + '/mimic_sepsis3.csv')
+        id_df = pd.read_csv(datadir + '/mimic_sepsis3.csv')
         sepsis3_id = id_df['stay_id'].values  # 1d array
     else:
-        id_df = pd.read_csv(dir_csv[plf] + '/eicu_sepsis3.csv')
+        id_df = pd.read_csv(datadir + '/eicu_sepsis3.csv')
         sepsis3_id = id_df['patientunitstayid'].values # 1d array 
     index_dict = dict((value, idx) for idx, value in enumerate(ids))
     ind = [index_dict[x] for x in sepsis3_id if x in index_dict.keys()]
@@ -189,14 +179,6 @@ def filter_sepsis(database, vital, static, sofa, ids, plf):
     static_sepsis = [static[i] for i in ind]
     sofa_sepsis = [sofa[i] for i in ind]
     return vital_sepsis, static_sepsis, sofa_sepsis, [ids[i] for i in ind]
-
-# def filter_sepsis_eicu(vital, sofa, ids):
-    
-#     index_dict = dict((value, idx) for idx,value in enumerate(ids))
-#     ind = [index_dict[x] for x in sepsis3_id if x in index_dict.keys()]
-#     vital_sepsis = [vital[i] for i in ind]
-#     sofa_sepsis = [sofa[i] for i in ind]
-#     return vital_sepsis, sofa_sepsis, [ids[i] for i in ind]
 
 def slice_data(trainval_data, index):
     """

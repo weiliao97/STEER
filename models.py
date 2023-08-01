@@ -38,7 +38,7 @@ class MLP(nn.Module):
             )
         return
 
-# The following implementation is from
+# The following TCN encoder implementation is adapted from
 # @article{BaiTCN2018,
 # 	author    = {Shaojie Bai and J. Zico Kolter and Vladlen Koltun},
 # 	title     = {An Empirical Evaluation of Generic Convolutional and Recurrent Networks for Sequence Modeling},
@@ -134,23 +134,10 @@ class TemporalConv(nn.Module):
                                      padding=(kernel_size-1) * dilation_size, dropout=dropout)]
 
         self.network = nn.Sequential(*layers)
-        # self.linear = nn.Linear(num_channels[-1]*216, 120)
-        # nn.ReLU(),
-        # nn.Dropout(0.2),
-        # nn.Linear(128, 128),
-        # nn.ReLU(),
-        # nn.Dropout(0.2),
-        # nn.Linear(128, 1)
-        # )
 
     def forward(self, x):
-        # (16, 200, 216) --> (16, 40, 216)
+        # (bs, 200, T) --> (bs, zdim*2, T)
         x = self.network(x)
-        # (17, 2, 216) --> (17, 432)
-        # eg. t = torch.tensor([[[1, 2, 3], [3, 4, 4]], [[5, 6, 5], [7, 8, 4]], [[5, 6, 1], [7, 8, 1]]]) (2, 2, 3)
-        # after flatten tensor([[1, 2, 3, 3, 4, 4],[5, 6, 5, 7, 8, 4], [5, 6, 1, 7, 8, 1]])
-        # x = torch.flatten(x, start_dim=1, end_dim=2)
-        # x = self.linear(x)
         mu_dim = x.shape[1]//2
         return x[:, :mu_dim, :], x[:, mu_dim:, :]
 
@@ -212,28 +199,19 @@ class TemporalConvDec(nn.Module):
                                      padding=(kernel_size-1) * dilation_size, dropout=dropout)]
 
         self.network = nn.Sequential(*layers)
-        # self.linear = nn.Linear(60, 216*2)
-        # nn.ReLU(),
-        # nn.Dropout(0.2),
-        # nn.Linear(128, 128),
-        # nn.ReLU(),
-        # nn.Dropout(0.2),
-        # nn.Linear(128, 1)
-        # )
 
     def forward(self, x):
-        # (16, 60) --> (16, 432)
-        # x = self.linear(x)
-        # x = torch.reshape(x, (-1, 2, 216))
-        # (16, 20, 216) --> (16, 200, 216)
+        # (bs, zdim, T) --> (bs, 200, T)
         x = self.network(x)
-        # (17, 2, 216) --> (17, 432)
-        # eg. t = torch.tensor([[[1, 2, 3], [3, 4, 4]], [[5, 6, 5], [7, 8, 4]], [[5, 6, 1], [7, 8, 1]]]) (2, 2, 3)
-        # after flatten tensor([[1, 2, 3, 3, 4, 4],[5, 6, 5, 7, 8, 4], [5, 6, 1, 7, 8, 1]])
-        # x = torch.flatten(x, start_dim=1, end_dim=2)
         return x
 
-    
+# The following Ffvae implementation is adapted from
+# @article{reddy2022benchmarking,
+#   title={Benchmarking bias mitigation algorithms in representation learning through fairness metrics},
+#   author={Reddy, Charan},
+#   year={2022}
+# }
+# link : https://github.com/weiliao97/FairDeepLearning
 class Ffvae(nn.Module):
     """Initializes FFVAE network: VAE encoder, MLP classifier, MLP discriminator"""
     def __init__(self, args, weights):
@@ -257,9 +235,8 @@ class Ffvae(nn.Module):
         self.num_inputs = args.num_inputs
 
         self.disc_channels = args.disc_channels
-        self.regr_channels = args.regr_channels if args.regr_model == 'mlp' else args.regr_tcn_channels
-        self.regr_model = args.regr_model 
-        self.regr_only_nonsens = args.regr_only_nonsens
+        self.regr_channels = args.regr_channels 
+        self.regr_sens_nonsens = args.regr_sens_nonsens
         
         # VAE encoder
 
@@ -272,27 +249,18 @@ class Ffvae(nn.Module):
         self.adv_neurons = [args.zdim] + [self.disc_channels] + [2]
         self.discriminator = MLP(self.adv_neurons, args.zdim).to(self.device)
         self.class_neurons = ([args.zdim] + [200] + [1])
-            
-        if self.regr_only_nonsens:
-            self.regr_neurons = ([args.zdim-1] + [200] + [1])
+        
+        # regressor 
+        if self.regr_sens_nonsens:
+            self.regr_neurons = ([args.zdim] + [200] + [1])
             self.regr = MLP(self.regr_neurons, args.zdim).to(self.device)
         else:
-            self.regr_neurons = ([args.zdim] + [200] + [1])
+            self.regr_neurons = ([args.zdim-1] + [200] + [1])
             self.regr = MLP(self.regr_neurons, args.zdim).to(self.device)
 
         # MLP Classifier
-        if args.regr_model == 'mlp':
-            
-            self.classifier = MLP(self.class_neurons, args.zdim).to(self.device)
-            
-        elif args.regr_model == 'tcn':
-            
-            self.classifier = TCN(num_inputs=self.zdim, num_channels=self.regr_channels,
-                                        kernel_size=self.kernel_size, dropout=self.drop_out).to(self.device)
-        
-        else:
-            raise NotImplementedError("regr_model not implemented")
-
+        self.classifier = MLP(self.class_neurons, args.zdim).to(self.device)
+ 
         # index for sensitive attribute
         self.n_sens = 1
         self.sens_idx = list(range(self.n_sens))
@@ -340,9 +308,7 @@ class Ffvae(nn.Module):
     def forward(self, inputs, key_mask, labels, attrs, mode="train"):
         """Computes forward pass through encoder ,
             Computes backward pass on the target function"""
-        # # Make inputs between 0, 1
-        # x = (inputs + 1) / 2
-
+       
         # encode: get q(z,b|x)
         # (bs, z_dim, T)
         _mu, _logvar = self.encoder(inputs)
@@ -367,8 +333,6 @@ class Ffvae(nn.Module):
         zb[:, self.nonsens_idx, :] = z
 
         # decode: get p(x|z,b)
-        # xIz_params = self.decoder(zb, "decode")  # decoder yields distn params not preds
-    
         # (bs, z_dim, T) --> (bs, 200, T)
         xIz_params = self.decoder(zb)
 
@@ -410,19 +374,17 @@ class Ffvae(nn.Module):
         # consider mask 
         # [Tensor with shape torch.Size([T1, 2]), Tensor with shape torch.Size([T2, 2])
         logits_recover = [logits_joint[i][key_mask[i]==0]for i in range(len(logits_joint))]
-#         torch.Size([bs])
+        # torch.Size([bs])
         total_corr = torch.stack([(l[:, 0] - l[:, 1]).mean() for l in logits_recover])
         
-        # add sofa loss classifier has to be tune as well 
-        if self.regr_only_nonsens:
-            sofa_p_s1 = self.regr(mu.transpose(1, 2), "classify")
-        else:
+        # add sofa loss 
+        if self.regr_sens_nonsens:
             sofa_p_s1 = self.regr(_mu.transpose(1, 2), "classify")
+        else:
+            sofa_p_s1 = self.regr(mu.transpose(1, 2), "classify")
         sofa_loss = [mse_loss(sofa_p_s1[i][key_mask[i]==0], labels[i][key_mask[i]==0]) \
             for i in range(len(sofa_p_s1))]
-#         regr_loss = torch.mean(torch.stack(sofa_loss))
 
-        # random elbo 10^4, totoal_corr 10^-1, clf_losses 10^-2
         ffvae_loss = (
             - self.beta * elbo.mean()
             + self.gamma * total_corr.mean()
@@ -437,12 +399,12 @@ class Ffvae(nn.Module):
         z_fake = z_fake.to(self.device).detach()
 
         # discriminator
-#         (bs, T, 2 )
+        # (bs, T, 2 )
         logits_joint_prime, probs_joint_prime = self.discriminator(
             z_fake.transpose(1, 2), "discriminator"
         )
         logits_prime_recover = [logits_joint_prime[i][key_mask[i]==0]for i in range(len(logits_joint_prime))]
-        # 10^-1 torch.Size([])
+        #  torch.Size([])
         disc_loss = (
         0.5
         * (
@@ -459,11 +421,7 @@ class Ffvae(nn.Module):
         encoded_x[:, 0, :] = torch.randn_like(encoded_x[:, 0, :])
 
         # torch.Size([bs, T, 1])
-        if self.regr_model == 'mlp':
-            sofa_p = self.classifier(encoded_x.transpose(1, 2), "classify")
-        elif self.regr_model == 'tcn':
-            # encoder x (bs, z_dim, T) 
-            sofa_p =  self.classifier(encoded_x)
+        sofa_p = self.classifier(encoded_x.transpose(1, 2), "classify")
             
         loss = [mse_loss(sofa_p[i][key_mask[i]==0], labels[i][key_mask[i]==0]) \
             for i in range(len(sofa_p))]
@@ -473,7 +431,7 @@ class Ffvae(nn.Module):
             ffvae_cost=ffvae_loss, recon_cost=recon_term.mean(), kl_cost=kl.mean(), corr_term=total_corr.mean(), clf_term = torch.stack(clf_losses).mean(), clf_w_term = torch.stack(clf_w_losses).mean(), sofa_term = torch.stack(sofa_loss).mean(), disc_cost=disc_loss, main_cost=sofap_loss
         )
 
-        # ffvae optimization
+        # tsvae optimization
         if mode == "ffvae_train":
             self.optimizer_ffvae.zero_grad()
             ffvae_loss.backward(retain_graph=True)
@@ -485,7 +443,7 @@ class Ffvae(nn.Module):
             torch.nn.utils.clip_grad_norm_(self.discriminator_params(), 5.0)
             self.optimizer_disc.step()
 
-        # classifier optimization
+        # regressor optimization
         elif mode == "train":
             self.optimizer_class.zero_grad()
             sofap_loss.backward()

@@ -5,7 +5,7 @@ This is the approach: TIME-Series variaonal autoencoder model for Safeguarding P
 ![Schematic](./images/schematic.jpg)
 
 ## Data 
-The data needed is the same as that in Learning_Time_Series_EHR repo. 
+The data needed is the same as that in [Learning_Time_Series_EHR](https://github.com/weiliao97/Learning_Time_Series_EHR) repo. 
 
 ###  Case 1: single attribute (0: sex, 1: age, 21: race), SOFA prediction, MIMIV-IV data
 	python main.py --epochs 150 --enc_channels 256 128 64 10 --dec_channels 64 128 256 200 --lr 0.0001 --beta 0.001 --checkpoint test --theta 5 --sens_ind 0 --dir_data xxx --dir_save xxx

@@ -1,4 +1,8 @@
-# TSVAE 
+# TIMESPAN 
+
+This is the approach: TIME-Series variaonal autoencoder model for Safeguarding Privacy And fairNess (TIMESPAN) used in our paper [Learning from Time-series EHR](https://arxiv.org/abs/2309.11373). The approach tries to learn a structured latent space from time-series EHR. Such a latent space is composed of two subspaces, sensitive latents and non-sensive latents. The desired properties are: 1. disentanglement (the ability of using sensive latents to predict sensitive labels); and 2. utility (the ability to perform clinical predicon tasks using only nonsensive latents).  The approach can adapt to both point predicon such as in-hospital mortality or time-series predicon such as clinical scores. The latter requires time-series information in the latent space as well. The sensive latents can be discarded or noised out when performing downstream tasks in order to protect the sensive atrributes from being utilized. The results and the detailed training objectives are demonstrated in the paper.  
+
+![Schemtic](./images/schematic.png)
 
 ## Data 
 The data needed is the same as that in Learning_Time_Series_EHR repo. 
